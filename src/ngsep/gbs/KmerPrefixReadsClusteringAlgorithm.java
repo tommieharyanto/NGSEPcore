@@ -372,6 +372,10 @@ public class KmerPrefixReadsClusteringAlgorithm {
 			int numNotNull = 0;
 			int numCluster = 0;
 			
+			//Active tasks list
+			ArrayList<ProcessClusterVCFTask> activeTasks = new ArrayList<>();
+			
+			
 			// save memory usage every 5 seconds
 			memUsage.println("Time(ms)\tMemoryUsage(MB)");
 			Timer timer = new Timer();
@@ -412,13 +416,36 @@ public class KmerPrefixReadsClusteringAlgorithm {
 					if(currentReads[i]==null) numNotNull--;
 				}
 				
-				List<VCFRecord> records = processCluster(nextCluster, header);
-				writer.printVCFRecords(records, outVariants);
+				//Adding new task to the list and starting the new task
+				ProcessClusterVCFTask newTask = new ProcessClusterVCFTask(nextCluster, header, samples, heterozygosityRate, maxBaseQS, minQuality, minAlleleFrequency);
+				activeTasks.add(newTask);
+				newTask.start();
 				
 				if(nextCluster.getClusterNumber()%1000 == 0) {
 					System.out.println("Done with cluster " + nextCluster.getClusterNumber());
 				}	
 				numCluster++;
+			}
+			
+			//Esperar a que termine de recopilar todas las tareas
+			while(activeTasks.size() > 0) {
+				for(ProcessClusterVCFTask task : activeTasks) {
+					if(task.hasFinished()) {
+						activeTasks.remove(task);
+						List<VCFRecord> records = task.getRecords();
+						writer.printVCFRecords(records, outVariants);
+						
+						//Counts for statistics
+						if(task.hadCalledVariant()) numClustersWithCalledVariants++;
+						if(task.hadGenVariant()) numClustersWithGenVariants++;
+					}
+				}
+				
+				try {
+					Thread.sleep(10 * 1000);
+				} catch (Exception e) {
+					e.printStackTrace();
+				}
 			}
 			
 		} finally {
@@ -456,9 +483,7 @@ public class KmerPrefixReadsClusteringAlgorithm {
 	}
 		
 	
-	private void addReadsToCluster(ReadCluster nextCluster, Iterator<RawRead> iterator, 
-			RawRead[] currentReads, int i) throws IOException {
-		
+	private void addReadsToCluster(ReadCluster nextCluster, Iterator<RawRead> iterator, RawRead[] currentReads, int i) throws IOException {
 		RawRead currentRead = currentReads[i];
 		int numCluster = nextCluster.getClusterNumber();
 		while(currentRead!=null) {
@@ -487,8 +512,6 @@ public class KmerPrefixReadsClusteringAlgorithm {
 	}
 
 	private List<VCFRecord> processCluster(ReadCluster readCluster, VCFFileHeader vcfFileHeader) throws IOException {
-		
-		
 		boolean clusterWithCalledVar = false;
 		boolean clusterWithGenVar = false;
 		List<VCFRecord> records = new ArrayList<>();
@@ -638,8 +661,8 @@ public class KmerPrefixReadsClusteringAlgorithm {
 			variant = makeNewVariant(variant,calledAllelesSet);
 		}
 		return variant;
-		
 	}
+	
 	private GenomicVariant makeNewVariant(GenomicVariant variant, Set<String> newAlleles) {
 		if(variant.getFirst()==posPrint) System.out.println("Recoding alleles for "+variant.getFirst()+" alleles: "+Arrays.asList(variant.getAlleles()));
 		List<String> alleles = new ArrayList<>(newAlleles.size());
