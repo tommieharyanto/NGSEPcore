@@ -427,7 +427,7 @@ public class KmerPrefixReadsClusteringAlgorithm {
 				numCluster++;
 			}
 			
-			//Esperar a que termine de recopilar todas las tareas
+			//Wait for all tasks to finish
 			while(activeTasks.size() > 0) {
 				for(ProcessClusterVCFTask task : activeTasks) {
 					if(task.hasFinished()) {
