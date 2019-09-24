@@ -35,6 +35,9 @@ import java.util.Timer;
 import java.util.TimerTask;
 import java.util.TreeMap;
 import java.util.TreeSet;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 import java.util.regex.Pattern;
 import java.util.zip.GZIPOutputStream;
@@ -370,11 +373,7 @@ public class KmerPrefixReadsClusteringAlgorithm {
 		try (PrintStream outVariants = new PrintStream(outPrefix+"_variants.vcf");
 				PrintStream memUsage = new PrintStream(outPrefix + "_memoryUsage.txt");) {
 			int numNotNull = 0;
-			int numCluster = 0;
-			
-			//Active tasks list
-			ArrayList<ProcessClusterVCFTask> activeTasks = new ArrayList<>();
-			
+			int numCluster = 0;			
 			
 			// save memory usage every 5 seconds
 			memUsage.println("Time(ms)\tMemoryUsage(MB)");
@@ -390,6 +389,15 @@ public class KmerPrefixReadsClusteringAlgorithm {
 					numNotNull++;
 				}
 			}
+			
+			//Launched tasks list for retrieving data later on
+			ArrayList<ProcessClusterVCFTask> taskList = new ArrayList<ProcessClusterVCFTask>();
+			
+			//Thread queue
+			LinkedBlockingQueue<Runnable> workQueue = new LinkedBlockingQueue<Runnable>();
+			//Manage the threadpool
+			ThreadPoolExecutor pool = new ThreadPoolExecutor(2, 4, 30, TimeUnit.SECONDS, workQueue);
+			
 			// print header
 			writer.printHeader(header, outVariants);
 			log.info("Processing a total of " + Integer.toString(numberOfFiles) + " clustered files.");
@@ -417,9 +425,9 @@ public class KmerPrefixReadsClusteringAlgorithm {
 				}
 				
 				//Adding new task to the list and starting the new task
-				ProcessClusterVCFTask newTask = new ProcessClusterVCFTask(nextCluster, header, samples, heterozygosityRate, maxBaseQS, minQuality, minAlleleFrequency);
-				activeTasks.add(newTask);
-				newTask.start();
+			    ProcessClusterVCFTask newTask = new ProcessClusterVCFTask(nextCluster, header, writer, outVariants, samples, heterozygosityRate, maxBaseQS, minQuality, minAlleleFrequency);
+			    taskList.add(newTask);
+			    pool.execute(newTask);
 				
 				if(nextCluster.getClusterNumber()%1000 == 0) {
 					System.out.println("Done with cluster " + nextCluster.getClusterNumber());
@@ -428,12 +436,10 @@ public class KmerPrefixReadsClusteringAlgorithm {
 			}
 			
 			//Wait for all tasks to finish
-			while(activeTasks.size() > 0) {
-				for(ProcessClusterVCFTask task : activeTasks) {
+			while(taskList.size() > 0) {
+				for(ProcessClusterVCFTask task : taskList) {
 					if(task.hasFinished()) {
-						activeTasks.remove(task);
-						List<VCFRecord> records = task.getRecords();
-						writer.printVCFRecords(records, outVariants);
+						taskList.remove(task);
 						
 						//Counts for statistics
 						if(task.hadCalledVariant()) numClustersWithCalledVariants++;
@@ -447,7 +453,6 @@ public class KmerPrefixReadsClusteringAlgorithm {
 					e.printStackTrace();
 				}
 			}
-			
 		} finally {
 			for(FastqFileReader reader:readers) {
 				if(reader!=null) reader.close();

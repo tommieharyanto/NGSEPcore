@@ -1,5 +1,6 @@
 package ngsep.gbs;
 
+import java.io.PrintStream;
 import java.util.ArrayList;
 import java.util.Arrays;
 import java.util.List;
@@ -25,6 +26,7 @@ import ngsep.variants.GenomicVariantImpl;
 import ngsep.variants.SNV;
 import ngsep.variants.Sample;
 import ngsep.vcf.VCFFileHeader;
+import ngsep.vcf.VCFFileWriter;
 import ngsep.vcf.VCFRecord;
 
 public class ProcessClusterVCFTask extends Thread {
@@ -35,6 +37,8 @@ public class ProcessClusterVCFTask extends Thread {
 	//Data
 	private ReadCluster readCluster;
 	private VCFFileHeader vcfFileHeader;
+	private VCFFileWriter vcfWriter;
+	private PrintStream outVariants;
 	private List<Sample> samples = new ArrayList<>();
 	
 	//Params
@@ -48,9 +52,11 @@ public class ProcessClusterVCFTask extends Thread {
 	private boolean hasGenVariant = false;
 	//TODO: add to has variant counters
 	
-	public ProcessClusterVCFTask(ReadCluster readCluster, VCFFileHeader vcfFileHeader, List<Sample> samples, double heterozygosityRate, byte maxBaseQS, short minQuality, double minAlleleFrequency) {
+	public ProcessClusterVCFTask(ReadCluster readCluster, VCFFileHeader vcfFileHeader, VCFFileWriter writer, PrintStream outVariants, List<Sample> samples, double heterozygosityRate, byte maxBaseQS, short minQuality, double minAlleleFrequency) {
 		this.readCluster = readCluster;
 		this.vcfFileHeader = vcfFileHeader;
+		this.vcfWriter = writer;
+		this.outVariants = outVariants;
 		this.samples = samples;
 		this.heterozygosityRate = heterozygosityRate;
 		this.maxBaseQS = maxBaseQS;
@@ -77,6 +83,9 @@ public class ProcessClusterVCFTask extends Thread {
 	@Override
 	public void run() {
 		generatedRecords = generateRecordsForCluster();
+		synchronized (vcfWriter) {
+			vcfWriter.printVCFRecords(generatedRecords, outVariants);
+		}
 		hasFinished = true;
 	}
 	
