@@ -172,23 +172,23 @@ public class KmerPrefixReadsClusteringAlgorithm {
 	
 	public void run() throws IOException {
 		
-		processInfo.addTime(System.nanoTime(), "Load files start");
-		loadFilenamesAndSamples();
-		processInfo.addTime(System.nanoTime(), "Load files end");
-		processInfo.addTime(System.nanoTime(), "BuildKmersMap start");
-		log.info("Loaded "+filenamesBySampleId1.size()+" samples");
-		buildSamples();
-		buildKmersMap();
-		processInfo.addTime(System.nanoTime(), "BuildKmersMap end");
-		processInfo.addTime(System.nanoTime(), "Cluster reads start");
-		log.info("Built kmers map with "+kmersMap.size()+" clusters");
-		this.clusterSizes = new int[kmersMap.size()];
-		List<String> clusteredReadsFilenames = clusterReads();
-		printDistribution();
-		printStatistics("initial");
-		processInfo.addTime(System.nanoTime(), "Cluster reads end");
+//		processInfo.addTime(System.nanoTime(), "Load files start");
+//		loadFilenamesAndSamples();
+//		processInfo.addTime(System.nanoTime(), "Load files end");
+//		processInfo.addTime(System.nanoTime(), "BuildKmersMap start");
+//		log.info("Loaded "+filenamesBySampleId1.size()+" samples");
+//		buildSamples();
+//		buildKmersMap();
+//		processInfo.addTime(System.nanoTime(), "BuildKmersMap end");
+//		processInfo.addTime(System.nanoTime(), "Cluster reads start");
+//		log.info("Built kmers map with "+kmersMap.size()+" clusters");
+//		this.clusterSizes = new int[kmersMap.size()];
+//		List<String> clusteredReadsFilenames = clusterReads();
+//		printDistribution();
+//		printStatistics("initial");
+//		processInfo.addTime(System.nanoTime(), "Cluster reads end");
 		processInfo.addTime(System.nanoTime(), "Variant calling start");		
-//		List<String> clusteredReadsFilenames = debug();
+		List<String> clusteredReadsFilenames = debug();
 		this.numClusteredFiles = clusteredReadsFilenames.size();
 		log.info("Clustered reads");
 		callVariants(clusteredReadsFilenames);
@@ -209,13 +209,16 @@ public class KmerPrefixReadsClusteringAlgorithm {
 	
 	private List<String> debug() {		
 		log.info("Skipping to call variants");
-		int numClusters = 1831958;
-		int stop = 139;
-		String run = "11";
-		String prefix = "run_" + run + "_clusteredReads_";
+		int numClusters = 3000000;
+		int stop = 141;
+		String run = "17";
+		String prefix = "C:\\Users\\jagv1\\OneDrive\\Documents\\Workspaces\\Eclipse\\NGSEP\\DATA\\AGROSAVIA_DUMPS\\run_" + run + "_clusteredReads_";
 		String suffix = ".fastq.gz";
 		List<String> clusteredReadsFilenames = new ArrayList<>();
+		
 		this.clusterSizes = new int[numClusters];
+		this.MIN_CLUSTER_DEPTH = -1;
+		
 		for(int i=0;i<=stop;i++) {
 			clusteredReadsFilenames.add(prefix + i + suffix);
 		}
@@ -396,7 +399,7 @@ public class KmerPrefixReadsClusteringAlgorithm {
 			//Thread queue
 			LinkedBlockingQueue<Runnable> workQueue = new LinkedBlockingQueue<Runnable>();
 			//Manage the threadpool
-			ThreadPoolExecutor pool = new ThreadPoolExecutor(2, 4, 30, TimeUnit.SECONDS, workQueue);
+			ThreadPoolExecutor pool = new ThreadPoolExecutor(6, 12, 120, TimeUnit.SECONDS, workQueue);
 			
 			// print header
 			writer.printHeader(header, outVariants);
@@ -409,12 +412,60 @@ public class KmerPrefixReadsClusteringAlgorithm {
 					
 					//skip small clusters
 					if(this.clusterSizes[numCluster] < MIN_CLUSTER_DEPTH) {
-						skipCluster(numCluster, iterators.get(i), currentReads, i);
+						System.out.println("SKIPPING CLUSTER -- TOO SMALL");
+						Iterator<RawRead> iterator = iterators.get(i);
+						RawRead currentRead = currentReads[i];
+						
+						while(currentRead!=null) {
+							String readIdWithCluster = currentRead.getName();
+							String [] items = readIdWithCluster.split("\\$");
+							if(items.length < 2) {
+								continue;
+							}
+							int currentReadCluster = Integer.parseInt(items[1]);
+							// TODO rename reads without cluster info
+							String readId = items[2];
+							if (currentReadCluster>numCluster) break;
+							else if (currentReadCluster<numCluster) throw new RuntimeException("Disorgainzed file. Current cluster: "+numCluster+" found: "+currentReadCluster+" in read. "+readIdWithCluster);
+							if(iterator.hasNext()) {
+								currentReads[i] = iterator.next();
+								currentRead = currentReads[i];
+								
+							} else {
+								log.info("Done with file " + Integer.toString(i) + ".");
+								currentReads[i] = null;
+								currentRead = null;				
+							}
+						}
 					}
 					
 					//skip large clusters
 					else if(this.clusterSizes[numCluster] > MAX_CLUSTER_DEPTH) {
-						skipCluster(numCluster, iterators.get(i), currentReads, i);
+						System.out.println("SKIPPING CLUSTER -- TOO BIG");
+						Iterator<RawRead> iterator = iterators.get(i);
+						RawRead currentRead = currentReads[i];
+						
+						while(currentRead!=null) {
+							String readIdWithCluster = currentRead.getName();
+							String [] items = readIdWithCluster.split("\\$");
+							if(items.length < 2) {
+								continue;
+							}
+							int currentReadCluster = Integer.parseInt(items[1]);
+							// TODO rename reads without cluster info
+							String readId = items[2];
+							if (currentReadCluster>numCluster) break;
+							else if (currentReadCluster<numCluster) throw new RuntimeException("Disorgainzed file. Current cluster: "+numCluster+" found: "+currentReadCluster+" in read. "+readIdWithCluster);
+							if(iterator.hasNext()) {
+								currentReads[i] = iterator.next();
+								currentRead = currentReads[i];
+								
+							} else {
+								log.info("Done with file " + Integer.toString(i) + ".");
+								currentReads[i] = null;
+								currentRead = null;				
+							}
+						}
 					}
 					
 					else {
@@ -428,6 +479,7 @@ public class KmerPrefixReadsClusteringAlgorithm {
 			    ProcessClusterVCFTask newTask = new ProcessClusterVCFTask(nextCluster, header, writer, outVariants, samples, heterozygosityRate, maxBaseQS, minQuality, minAlleleFrequency);
 			    taskList.add(newTask);
 			    pool.execute(newTask);
+			    System.out.println("ADDED NEW TASK");
 				
 				if(nextCluster.getClusterNumber()%1000 == 0) {
 					System.out.println("Done with cluster " + nextCluster.getClusterNumber());
@@ -459,34 +511,6 @@ public class KmerPrefixReadsClusteringAlgorithm {
 			}
 		}
 	}
-	
-	private void skipCluster(Integer numCluster, Iterator<RawRead> iterator, 
-			RawRead[] currentReads, int i) throws IOException {
-		RawRead currentRead = currentReads[i];
-		
-		while(currentRead!=null) {
-			String readIdWithCluster = currentRead.getName();
-			String [] items = readIdWithCluster.split("\\$");
-			if(items.length < 2) {
-				continue;
-			}
-			int currentReadCluster = Integer.parseInt(items[1]);
-			// TODO rename reads without cluster info
-			String readId = items[2];
-			if (currentReadCluster>numCluster) break;
-			else if (currentReadCluster<numCluster) throw new RuntimeException("Disorgainzed file. Current cluster: "+numCluster+" found: "+currentReadCluster+" in read. "+readIdWithCluster);
-			if(iterator.hasNext()) {
-				currentReads[i] = iterator.next();
-				currentRead = currentReads[i];
-				
-			} else {
-				log.info("Done with file " + Integer.toString(i) + ".");
-				currentReads[i] = null;
-				currentRead = null;				
-			}
-		}
-	}
-		
 	
 	private void addReadsToCluster(ReadCluster nextCluster, Iterator<RawRead> iterator, RawRead[] currentReads, int i) throws IOException {
 		RawRead currentRead = currentReads[i];

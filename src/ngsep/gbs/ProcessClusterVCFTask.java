@@ -82,10 +82,12 @@ public class ProcessClusterVCFTask extends Thread {
 	
 	@Override
 	public void run() {
+		System.out.println("NEW TASK RUNNING");
 		generatedRecords = generateRecordsForCluster();
 		synchronized (vcfWriter) {
 			vcfWriter.printVCFRecords(generatedRecords, outVariants);
 		}
+		System.out.println("TASK COMPLETE!!");
 		hasFinished = true;
 	}
 	
