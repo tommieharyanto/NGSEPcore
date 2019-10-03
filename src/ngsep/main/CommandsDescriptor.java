@@ -103,6 +103,7 @@ public class CommandsDescriptor {
 		releaseDate = rootElement.getAttribute(ATTRIBUTE_DATE);
 		loadSoftwareDescription(rootElement);
 		
+		
 	}
 	/**
 	 * Loads the description of the software

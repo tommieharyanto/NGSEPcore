@@ -35,8 +35,8 @@ import java.util.Timer;
 import java.util.TimerTask;
 import java.util.TreeMap;
 import java.util.TreeSet;
-import java.util.concurrent.LinkedBlockingQueue;
-import java.util.concurrent.ThreadPoolExecutor;
+import java.util.concurrent.ExecutorService;
+import java.util.concurrent.Executors;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 import java.util.regex.Pattern;
@@ -97,6 +97,10 @@ public class KmerPrefixReadsClusteringAlgorithm {
 	public int MIN_CLUSTER_DEPTH = 100;
 	public int MAX_CLUSTER_DEPTH = 1000;
 	
+	//Variables for parallel VCF
+	private static final int MAX_TASK_COUNT = 200;
+	private int numThreads = 1;
+	
 	private String inputDirectory=".";
 	private String outPrefix="./output";
 	private int kmerLength = DEF_KMER_LENGTH;
@@ -129,9 +133,12 @@ public class KmerPrefixReadsClusteringAlgorithm {
 	
 	public static void main(String[] args) throws Exception {
 		KmerPrefixReadsClusteringAlgorithm instance = new KmerPrefixReadsClusteringAlgorithm();
-		int i = CommandsDescriptor.getInstance().loadOptions(instance, args);
+		CommandsDescriptor c = CommandsDescriptor.getInstance();
+		int i = c.loadOptions(instance, args);
+		
 		instance.inputDirectory = args[i++];
 		instance.outPrefix = args[i++];
+		instance.numThreads = Integer.parseInt(args[i++]);
 		instance.run();
 	}
 	
@@ -170,7 +177,7 @@ public class KmerPrefixReadsClusteringAlgorithm {
 
 	// TODO fix Large and Small cluster count. 
 	
-	public void run() throws IOException {
+	public void run() throws IOException, InterruptedException {
 		
 //		processInfo.addTime(System.nanoTime(), "Load files start");
 //		loadFilenamesAndSamples();
@@ -212,7 +219,8 @@ public class KmerPrefixReadsClusteringAlgorithm {
 		int numClusters = 3000000;
 		int stop = 141;
 		String run = "17";
-		String prefix = "C:\\Users\\jagv1\\OneDrive\\Documents\\Workspaces\\Eclipse\\NGSEP\\DATA\\AGROSAVIA_DUMPS\\run_" + run + "_clusteredReads_";
+		String DEBUG_PATH = "/Users/jandresgomez/OneDrive/Documents/Workspaces/Eclipse/NGSEP/DATA/AGROSAVIA_DUMPS/";
+		String prefix = "run_" + run + "_clusteredReads_";
 		String suffix = ".fastq.gz";
 		List<String> clusteredReadsFilenames = new ArrayList<>();
 		
@@ -220,7 +228,7 @@ public class KmerPrefixReadsClusteringAlgorithm {
 		this.MIN_CLUSTER_DEPTH = -1;
 		
 		for(int i=0;i<=stop;i++) {
-			clusteredReadsFilenames.add(prefix + i + suffix);
+			clusteredReadsFilenames.add(DEBUG_PATH + prefix + i + suffix);
 		}
 		
 		return clusteredReadsFilenames;
@@ -345,7 +353,7 @@ public class KmerPrefixReadsClusteringAlgorithm {
 		return;
 	}
 	
-	public void callVariants(List<String> clusteredReadsFilenames) throws IOException {
+	public void callVariants(List<String> clusteredReadsFilenames) throws IOException, InterruptedException {
 		int numberOfFiles = clusteredReadsFilenames.size();
 
 		for(int size: this.clusterSizes) {
@@ -396,10 +404,8 @@ public class KmerPrefixReadsClusteringAlgorithm {
 			//Launched tasks list for retrieving data later on
 			ArrayList<ProcessClusterVCFTask> taskList = new ArrayList<ProcessClusterVCFTask>();
 			
-			//Thread queue
-			LinkedBlockingQueue<Runnable> workQueue = new LinkedBlockingQueue<Runnable>();
 			//Manage the threadpool
-			ThreadPoolExecutor pool = new ThreadPoolExecutor(6, 12, 120, TimeUnit.SECONDS, workQueue);
+			ExecutorService pool = Executors.newFixedThreadPool(numThreads);
 			
 			// print header
 			writer.printHeader(header, outVariants);
@@ -479,31 +485,38 @@ public class KmerPrefixReadsClusteringAlgorithm {
 			    ProcessClusterVCFTask newTask = new ProcessClusterVCFTask(nextCluster, header, writer, outVariants, samples, heterozygosityRate, maxBaseQS, minQuality, minAlleleFrequency);
 			    taskList.add(newTask);
 			    pool.execute(newTask);
-			    System.out.println("ADDED NEW TASK");
+			    //Kill the pool if it has too many tasks
+			    if(taskList.size() > MAX_TASK_COUNT) {
+			    	pool.shutdown();
+			    	pool.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS);
+			    	System.out.println("TERMINATED POOL");
+			    	
+			    	
+			    	//Manage tasks and statistics
+					for(ProcessClusterVCFTask task : taskList) {
+						if(task.hasFinished()) {
+							taskList.remove(task);
+							
+							//Counts for statistics
+							if(task.hadCalledVariant()) numClustersWithCalledVariants++;
+							if(task.hadGenVariant()) numClustersWithGenVariants++;
+						}
+					}
+					
+					if(!pool.isShutdown()) {
+						System.err.println("POOL WAS NOT SHUT DOWN!");
+						throw new InterruptedException("POOL WAS NOT SHUT DOWN!");
+					}
+					//Create new pool
+					pool = Executors.newFixedThreadPool(numThreads);
+					System.out.println(String.format("STARTED POOL ==||== %d", taskList.size()));
+			    }
+			    
 				
 				if(nextCluster.getClusterNumber()%1000 == 0) {
 					System.out.println("Done with cluster " + nextCluster.getClusterNumber());
 				}	
 				numCluster++;
-			}
-			
-			//Wait for all tasks to finish
-			while(taskList.size() > 0) {
-				for(ProcessClusterVCFTask task : taskList) {
-					if(task.hasFinished()) {
-						taskList.remove(task);
-						
-						//Counts for statistics
-						if(task.hadCalledVariant()) numClustersWithCalledVariants++;
-						if(task.hadGenVariant()) numClustersWithGenVariants++;
-					}
-				}
-				
-				try {
-					Thread.sleep(10 * 1000);
-				} catch (Exception e) {
-					e.printStackTrace();
-				}
 			}
 		} finally {
 			for(FastqFileReader reader:readers) {
