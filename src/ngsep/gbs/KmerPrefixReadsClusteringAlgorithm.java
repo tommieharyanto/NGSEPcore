@@ -37,6 +37,8 @@ import java.util.TreeMap;
 import java.util.TreeSet;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.LinkedBlockingQueue;
+import java.util.concurrent.ThreadPoolExecutor;
 import java.util.concurrent.TimeUnit;
 import java.util.logging.Logger;
 import java.util.regex.Pattern;
@@ -98,7 +100,7 @@ public class KmerPrefixReadsClusteringAlgorithm {
 	public int MAX_CLUSTER_DEPTH = 1000;
 	
 	//Variables for parallel VCF
-	private static final int MAX_TASK_COUNT = 200;
+	private static final int MAX_TASK_COUNT = 1000;
 	private int numThreads = 1;
 	
 	private String inputDirectory=".";
@@ -179,23 +181,23 @@ public class KmerPrefixReadsClusteringAlgorithm {
 	
 	public void run() throws IOException, InterruptedException {
 		
-//		processInfo.addTime(System.nanoTime(), "Load files start");
-//		loadFilenamesAndSamples();
-//		processInfo.addTime(System.nanoTime(), "Load files end");
-//		processInfo.addTime(System.nanoTime(), "BuildKmersMap start");
-//		log.info("Loaded "+filenamesBySampleId1.size()+" samples");
-//		buildSamples();
-//		buildKmersMap();
-//		processInfo.addTime(System.nanoTime(), "BuildKmersMap end");
-//		processInfo.addTime(System.nanoTime(), "Cluster reads start");
-//		log.info("Built kmers map with "+kmersMap.size()+" clusters");
-//		this.clusterSizes = new int[kmersMap.size()];
-//		List<String> clusteredReadsFilenames = clusterReads();
-//		printDistribution();
-//		printStatistics("initial");
-//		processInfo.addTime(System.nanoTime(), "Cluster reads end");
+		processInfo.addTime(System.nanoTime(), "Load files start");
+		loadFilenamesAndSamples();
+		processInfo.addTime(System.nanoTime(), "Load files end");
+		processInfo.addTime(System.nanoTime(), "BuildKmersMap start");
+		log.info("Loaded "+filenamesBySampleId1.size()+" samples");
+		buildSamples();
+		buildKmersMap();
+		processInfo.addTime(System.nanoTime(), "BuildKmersMap end");
+		processInfo.addTime(System.nanoTime(), "Cluster reads start");
+		log.info("Built kmers map with "+kmersMap.size()+" clusters");
+		this.clusterSizes = new int[kmersMap.size()];
+		List<String> clusteredReadsFilenames = clusterReads();
+		printDistribution();
+		printStatistics("initial");
+		processInfo.addTime(System.nanoTime(), "Cluster reads end");
 		processInfo.addTime(System.nanoTime(), "Variant calling start");		
-		List<String> clusteredReadsFilenames = debug();
+//		List<String> clusteredReadsFilenames = debug();
 		this.numClusteredFiles = clusteredReadsFilenames.size();
 		log.info("Clustered reads");
 		callVariants(clusteredReadsFilenames);
@@ -216,19 +218,15 @@ public class KmerPrefixReadsClusteringAlgorithm {
 	
 	private List<String> debug() {		
 		log.info("Skipping to call variants");
-		int numClusters = 3000000;
-		int stop = 141;
-		String run = "17";
-		String DEBUG_PATH = "/Users/jandresgomez/OneDrive/Documents/Workspaces/Eclipse/NGSEP/DATA/AGROSAVIA_DUMPS/";
+		int numClusters = 1831958;
+		int stop = 139;
+		String run = "11";
 		String prefix = "run_" + run + "_clusteredReads_";
 		String suffix = ".fastq.gz";
 		List<String> clusteredReadsFilenames = new ArrayList<>();
-		
 		this.clusterSizes = new int[numClusters];
-		this.MIN_CLUSTER_DEPTH = -1;
-		
 		for(int i=0;i<=stop;i++) {
-			clusteredReadsFilenames.add(DEBUG_PATH + prefix + i + suffix);
+			clusteredReadsFilenames.add(prefix + i + suffix);
 		}
 		
 		return clusteredReadsFilenames;
@@ -405,7 +403,7 @@ public class KmerPrefixReadsClusteringAlgorithm {
 			ArrayList<ProcessClusterVCFTask> taskList = new ArrayList<ProcessClusterVCFTask>();
 			
 			//Manage the threadpool
-			ExecutorService pool = Executors.newFixedThreadPool(numThreads);
+			ThreadPoolExecutor pool = new ThreadPoolExecutor(numThreads, numThreads, Long.MAX_VALUE, TimeUnit.NANOSECONDS, new LinkedBlockingQueue<Runnable>());
 			
 			// print header
 			writer.printHeader(header, outVariants);
@@ -485,30 +483,37 @@ public class KmerPrefixReadsClusteringAlgorithm {
 			    ProcessClusterVCFTask newTask = new ProcessClusterVCFTask(nextCluster, header, writer, outVariants, samples, heterozygosityRate, maxBaseQS, minQuality, minAlleleFrequency);
 			    taskList.add(newTask);
 			    pool.execute(newTask);
+			    
 			    //Kill the pool if it has too many tasks
-			    if(taskList.size() > MAX_TASK_COUNT) {
+			    int taskCount = pool.getQueue().size();
+			    System.out.println(String.format("TASK COUNT == %d", taskCount));
+			    if(taskCount > MAX_TASK_COUNT) {
 			    	pool.shutdown();
 			    	pool.awaitTermination(Long.MAX_VALUE, TimeUnit.NANOSECONDS);
 			    	System.out.println("TERMINATED POOL");
 			    	
-			    	
 			    	//Manage tasks and statistics
-					for(ProcessClusterVCFTask task : taskList) {
-						if(task.hasFinished()) {
-							taskList.remove(task);
+			    	Iterator<ProcessClusterVCFTask> it = taskList.iterator();
+			    	while(it.hasNext()) {
+			    		ProcessClusterVCFTask task = it.next();
+			    		
+			    		if(task.hasFinished()) {
+							it.remove();
 							
 							//Counts for statistics
 							if(task.hadCalledVariant()) numClustersWithCalledVariants++;
 							if(task.hadGenVariant()) numClustersWithGenVariants++;
 						}
-					}
+			    	}
 					
 					if(!pool.isShutdown()) {
 						System.err.println("POOL WAS NOT SHUT DOWN!");
 						throw new InterruptedException("POOL WAS NOT SHUT DOWN!");
 					}
+
 					//Create new pool
-					pool = Executors.newFixedThreadPool(numThreads);
+					taskList = new ArrayList<ProcessClusterVCFTask>();
+					pool = new ThreadPoolExecutor(numThreads, numThreads, Long.MAX_VALUE, TimeUnit.NANOSECONDS, new LinkedBlockingQueue<Runnable>());
 					System.out.println(String.format("STARTED POOL ==||== %d", taskList.size()));
 			    }
 			    
